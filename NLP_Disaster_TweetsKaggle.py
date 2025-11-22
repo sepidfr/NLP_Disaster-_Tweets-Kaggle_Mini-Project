@@ -70,6 +70,10 @@ print("Test shape:", test.shape)
 
 train.head()
 
+display(train.info())
+
+display(train.isnull().sum())
+
 """### **2A — Missing Values Analysis**
 
 Before performing any text preprocessing or model training, I first examine the dataset for missing values. Identifying missing entries is an essential preprocessing step because empty fields in the `text`, `keyword`, or `location` columns may affect feature extraction and model performance.
@@ -94,7 +98,97 @@ summary = pd.concat([missing_count, missing_pct], axis=1).sort_values("missing",
 styled_summary = summary.style.format({"missing_%": "{:.2f}%"}).background_gradient(cmap="Blues")
 styled_summary
 
-"""### **2B — Preprocessing: Target Class Distribution**
+"""## 2B- In this step, I generated three word clouds directly from the raw tweet text before applying any preprocessing. I first built separate corpora for:
+
+All tweets (overall)
+
+Disaster tweets (target = 1)
+
+Non-disaster tweets (target = 0)
+
+Then I used the WordCloud library to visualize the most frequent raw terms in each group. I kept stopwords minimal to preserve the original “raw” linguistic patterns. This visualization helped me understand noisy tokens, common bigrams, and thematic vocabulary differences between the two classes before cleaning.
+"""
+
+# Commented out IPython magic to ensure Python compatibility.
+# === Cell 2B : Word Cloud Visualization Before Data Cleaning =======================
+# Overall + class-specific word clouds from RAW "text" (no cleaning)
+# ------------------------------------------------------------------------------
+
+# 1) Install (Colab) and imports
+try:
+    from wordcloud import WordCloud, STOPWORDS
+except Exception:
+#     %pip -q install wordcloud
+    from wordcloud import WordCloud, STOPWORDS
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+# 2) Safety checks
+assert "text" in train.columns, "Column 'text' not found in `train`."
+if "target" not in train.columns:
+    # If no labels, show only the overall cloud
+    train["target"] = np.nan
+
+# 3) Build corpora from RAW text (no cleaning)
+def build_corpus(df: pd.DataFrame) -> str:
+    return " ".join(df["text"].dropna().astype(str).tolist())
+
+corpus_all = build_corpus(train)
+corpus_dis = build_corpus(train[train["target"] == 1]) if train["target"].notna().any() else ""
+corpus_nond = build_corpus(train[train["target"] == 0]) if train["target"].notna().any() else ""
+
+# 4) Stopwords (extend default minimally; keep raw feel)
+extra_stops = {
+    "https", "http", "co", "amp", "rt", "…", "’", "“", "”", "im", "u", "ur", "dont", "cant"
+}
+stops = STOPWORDS.union(extra_stops)
+
+# 5) WordCloud generator helper (consistent style)
+def make_wc(text: str, max_words=300):
+    return WordCloud(
+        width=1400,
+        height=900,
+        background_color="white",
+        max_words=max_words,
+        stopwords=stops,
+        collocations=True,     # keep common bigrams if detected
+        prefer_horizontal=0.9
+    ).generate(text)
+
+# 6) Plot
+ncols = 3 if train["target"].notna().any() else 1
+fig, axes = plt.subplots(1, ncols, figsize=(18, 6))
+
+if ncols == 1:
+    axes = [axes]
+
+# Overall
+wc_all = make_wc(corpus_all)
+axes[0].imshow(wc_all, interpolation="bilinear")
+axes[0].set_title("Word Cloud — Overall (RAW text)", fontsize=16, pad=12, weight="bold")
+axes[0].axis("off")
+
+# Disaster=1
+if ncols == 3:
+    wc_dis = make_wc(corpus_dis) if corpus_dis.strip() else None
+    if wc_dis:
+        axes[1].imshow(wc_dis, interpolation="bilinear")
+    axes[1].set_title("Word Cloud — Disaster (target=1, RAW)", fontsize=16, pad=12, weight="bold")
+    axes[1].axis("off")
+
+    # Non-Disaster=0
+    wc_nond = make_wc(corpus_nond) if corpus_nond.strip() else None
+    if wc_nond:
+        axes[2].imshow(wc_nond, interpolation="bilinear")
+    axes[2].set_title("Word Cloud — Non-Disaster (target=0, RAW)", fontsize=16, pad=12, weight="bold")
+    axes[2].axis("off")
+
+plt.tight_layout()
+plt.show()
+
+"""### **2C — Preprocessing: Target Class Distribution**
 
 As part of the preprocessing stage, I analyzed the distribution of the target variable, which indicated whether each tweet described a real disaster (`1`) or a non-disaster (`0`). Understanding this distribution was an important step because the balance between the two classes directly influenced model behavior during training and evaluation.
 
@@ -102,7 +196,7 @@ In this cell, I calculated the frequency of each target class, computed the perc
 
 """
 
-# === Cell 2B: Target Distribution Plot (sorted + % labels + colorful) ============
+# === Cell 2C: Target Distribution Plot (sorted + % labels + colorful) ============
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -136,7 +230,7 @@ else:
     plt.tight_layout()
     plt.show()
 
-"""### **2C — Text Normalization (URLs, Mentions, Hashtags, Numbers, Elongations)**
+"""### **2D — Text Normalization (URLs, Mentions, Hashtags, Numbers, Elongations)**
 
 To prepare the tweets for modeling, I applied a custom text-normalization function that standardizes noisy patterns commonly found in social media.  
 This step reduces variability, improves token consistency, and strengthens both TF–IDF and neural sequence models.
@@ -155,7 +249,7 @@ After defining the function, I apply it once to the entire dataset to create a n
 
 """
 
-# === Cell 2c: Text normalization (URLs, mentions, hashtags, emojis, elongations) ===
+# === Cell 2D: Text normalization (URLs, mentions, hashtags, emojis, elongations) ===
 import re
 import html
 
@@ -181,7 +275,100 @@ def normalize_tweet(s: str) -> str:
 train["text_clean"] = train["text"].fillna("").astype(str).map(normalize_tweet)
 print("✓ Text normalization complete. Column 'text_clean' created.")
 
-"""### **2D — Preview Original vs. Cleaned Tweets (Quality Check)**
+"""## 2E — Word Cloud Visualization After Data Cleaning
+
+In this step, I generated cleaned-text word clouds to analyze how the vocabulary changed after applying my full preprocessing pipeline (lowercasing, punctuation spacing, URL/mention/hashtag replacement, number masking, contraction handling, and repeated-character normalization).
+
+To evaluate the effect of cleaning, I created three separate word clouds based on the text_clean column:
+
+- Overall Word Cloud (cleaned text) — showing the dominant tokens across the entire dataset.
+
+- Disaster Word Cloud (cleaned, target=1) — highlighting common terms in tweets labeled as real disasters.
+
+- Non-Disaster Word Cloud (cleaned, target=0) — showing vocabulary typical of casual or metaphorical tweets.
+
+By comparing these cleaned word clouds to the raw versions, I confirmed that the preprocessing step successfully removed noise such as URLs, emojis, retweet markers, and inconsistent spellings. The cleaned distributions made the true semantic differences between the two classes much sharper, especially for disaster-related nouns and verbs. This visual inspection helped verify that the cleaning step improved lexical clarity before feature extraction and model training.
+
+
+"""
+
+# Commented out IPython magic to ensure Python compatibility.
+# === Cell 2E: Word Cloud Visualization AFTER Cleaning =========================
+# Uses train["text_clean"] produced in Cell 2C
+# -----------------------------------------------------------------------------
+# 1) Install (if needed) and imports
+try:
+    from wordcloud import WordCloud, STOPWORDS
+except Exception:
+#     %pip -q install wordcloud
+    from wordcloud import WordCloud, STOPWORDS
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+# 2) Safety: ensure cleaned column exists
+assert "text_clean" in train.columns, "Run Cell 2C first to create 'text_clean'."
+
+# If target absent, we still show overall cloud
+has_labels = "target" in train.columns and train["target"].notna().any()
+
+# 3) Build corpora from CLEANED text
+def build_corpus_clean(df: pd.DataFrame) -> str:
+    return " ".join(df["text_clean"].dropna().astype(str).tolist())
+
+corpus_all_c  = build_corpus_clean(train)
+corpus_dis_c  = build_corpus_clean(train[train["target"] == 1]) if has_labels else ""
+corpus_nond_c = build_corpus_clean(train[train["target"] == 0]) if has_labels else ""
+
+# 4) Stopwords (lighter than RAW case; most noise already normalized)
+extra_stops_clean = {
+    "<url>", "<user>", "<hashtag>", "<num>"
+}
+stops_clean = STOPWORDS.union(extra_stops_clean)
+
+# 5) Helper to make a consistent word cloud
+def make_wc(text: str, max_words=300):
+    return WordCloud(
+        width=1400,
+        height=900,
+        background_color="white",
+        max_words=max_words,
+        stopwords=stops_clean,
+        collocations=True,
+        prefer_horizontal=0.9
+    ).generate(text)
+
+# 6) Plot
+ncols = 3 if has_labels else 1
+fig, axes = plt.subplots(1, ncols, figsize=(18, 6))
+if ncols == 1:
+    axes = [axes]
+
+# Overall (cleaned)
+wc_all_c = make_wc(corpus_all_c)
+axes[0].imshow(wc_all_c, interpolation="bilinear")
+axes[0].set_title("Word Cloud — Overall (CLEANED text)", fontsize=16, pad=12, weight="bold")
+axes[0].axis("off")
+
+# Per-class (cleaned)
+if ncols == 3:
+    # Disaster = 1
+    if corpus_dis_c.strip():
+        axes[1].imshow(make_wc(corpus_dis_c), interpolation="bilinear")
+    axes[1].set_title("Word Cloud — Disaster (target=1, CLEANED)", fontsize=16, pad=12, weight="bold")
+    axes[1].axis("off")
+
+    # Non-Disaster = 0
+    if corpus_nond_c.strip():
+        axes[2].imshow(make_wc(corpus_nond_c), interpolation="bilinear")
+    axes[2].set_title("Word Cloud — Non-Disaster (target=0, CLEANED)", fontsize=16, pad=12, weight="bold")
+    axes[2].axis("off")
+
+plt.tight_layout()
+plt.show()
+
+"""### **2F — Preview Original vs. Cleaned Tweets (Quality Check)**
 
 To verify that normalization behaved as intended, I compare the **raw** and **cleaned** text side-by-side and include simple length diagnostics:
 
@@ -198,7 +385,7 @@ The colored backgrounds highlight magnitude differences in lengths, making it ea
 
 """
 
-# === Cell 2D: Preview original vs. cleaned tweets (styled) =======================
+# === Cell 2F: Preview original vs. cleaned tweets (styled) =======================
 import pandas as pd
 from IPython.display import display
 
@@ -811,7 +998,59 @@ for t in candidates:
 print(f"Best threshold on validation: {best_t:.3f}")
 print(f"Best validation F1: {best_f1:.4f}")
 
-"""### **6D **bConfusion Matrix for the BiLSTM Model (Row-Normalized %)**
+"""## 6 D- Training Curve — Combined Loss & Accuracy
+
+To visualize how my BiLSTM model learned over the training epochs, I generated an improved single-plot figure that displays both Loss and Accuracy curves together on one graph.
+Instead of separating them into two subplots, I used a dual-axis design:
+
+The left y-axis shows the training and validation loss.
+
+The right y-axis shows the training and validation accuracy.
+
+Solid lines represent loss, and dashed lines represent accuracy.
+
+Each curve has a distinct color to make the trends visually clear.
+
+This combined visualization allowed me to see convergence behavior, generalization gaps, and overfitting signals in a single unified plot, making the training dynamics easier to interpret. The dual-axis format also ensures that loss and accuracy remain readable despite having different numeric scales.
+"""
+
+# === 6-D-Training History (Improved) ==================================
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(10,6))
+plt.style.use("seaborn-v0_8")
+
+epochs = range(1, len(history.history["loss"]) + 1)
+
+# Plot Loss on left y-axis
+plt.plot(epochs, history.history["loss"], label="Train Loss", linewidth=2, color="#1f77b4")
+plt.plot(epochs, history.history["val_loss"], label="Val Loss", linewidth=2, color="#ff7f0e")
+
+# Plot Accuracy on right y-axis (secondary axis)
+ax1 = plt.gca()
+ax2 = ax1.twinx()
+
+ax2.plot(epochs, history.history["accuracy"], label="Train Acc", linestyle="--", linewidth=2, color="#2ca02c")
+ax2.plot(epochs, history.history["val_accuracy"], label="Val Acc", linestyle="--", linewidth=2, color="#d62728")
+
+# Titles and labels
+plt.title("Training History (Loss + Accuracy in One Plot)", fontsize=15, weight="bold")
+ax1.set_xlabel("Epoch", fontsize=12)
+ax1.set_ylabel("Loss", fontsize=12)
+ax2.set_ylabel("Accuracy", fontsize=12)
+
+# Grid
+ax1.grid(alpha=0.3)
+
+# Legends merged
+lines_1, labels_1 = ax1.get_legend_handles_labels()
+lines_2, labels_2 = ax2.get_legend_handles_labels()
+plt.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper right", fontsize=11)
+
+plt.tight_layout()
+plt.show()
+
+"""### **6E **bConfusion Matrix for the BiLSTM Model (Row-Normalized %)**
 
 
 
@@ -882,7 +1121,48 @@ plt.show()
 raw_df = pd.DataFrame(cm_counts, index=["True 0","True 1"], columns=["Pred 0","Pred 1"])
 display(raw_df.style.set_caption("Confusion Matrix — Raw Counts"))
 
-"""## **6E — Generating the Final Kaggle Submission (BiLSTM with Tuned Threshold)**
+"""## 6F — ROC Curve Analysis for the Hybrid TF–IDF + LinearSVC Model
+
+In this step, I evaluated the discriminative capability of my TF–IDF + LinearSVC classifier using the ROC (Receiver Operating Characteristic) curve and the AUC (Area Under the Curve) metric. Since LinearSVC does not output probabilities, I extracted the decision function scores, which provide a continuous measure of confidence for each prediction. These scores allow the ROC curve to be computed reliably.
+
+After obtaining the decision values from the validation set, I plotted the ROC curve using RocCurveDisplay.from_predictions(). The curve shows how the classifier balances true-positive and false-positive rates across different thresholds. I also computed the AUC value, which summarizes the overall ranking quality of the model.
+
+The model achieved an AUC of approximately 0.8624, indicating strong separability between disaster and non-disaster tweets. This confirms that the TF–IDF + LinearSVC baseline not only performs well in terms of accuracy and F1 but also maintains good ranking performance across multiple decision thresholds.
+
+This visualization complements the earlier confusion matrix by providing a more threshold-independent view of model performance.
+"""
+
+# === ROC for Hybrid TF-IDF + LinearSVC ====================================
+# Rebuild the same split used for LinearSVC and transform with the *fitted* tfidf
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import RocCurveDisplay, roc_auc_score
+
+# 1) Use the exact text field used for SVC (clean if available; else raw)
+X_text_svc = train["text_clean"] if "text_clean" in train.columns else train["text"].fillna("").astype(str)
+y_svc      = train["target"].astype(int)
+
+# 2) Recreate the same split (same seed, stratified)
+X_tr_svc, X_va_svc, y_tr_svc, y_va_svc = train_test_split(
+    X_text_svc, y_svc, test_size=0.20, random_state=42, stratify=y_svc
+)
+
+# 3) IMPORTANT: do NOT refit the vectorizer. Use the already-fitted `tfidf`.
+Xva_svc = tfidf.transform(X_va_svc)
+
+# 4) Decision scores from the already-trained `clf` (LinearSVC)
+y_scores = clf.decision_function(Xva_svc)
+
+# 5) ROC/AUC
+auc = roc_auc_score(y_va_svc, y_scores)
+plt.figure(figsize=(7,6))
+RocCurveDisplay.from_predictions(y_va_svc, y_scores)
+plt.title(f"ROC Curve — Hybrid TF-IDF + LinearSVC (AUC = {auc:.4f})", fontsize=14)
+plt.grid(alpha=0.3)
+plt.show()
+
+"""## **6G — Generating the Final Kaggle Submission (BiLSTM with Tuned Threshold)**
 
 In this final step, I created the Kaggle submission file using the BiLSTM model. After tuning the decision threshold in the previous section to maximize the F1-score on the validation set, I applied that optimized threshold (`best_t`) to the predicted probabilities on the test dataset.
 
@@ -893,7 +1173,7 @@ To create the submission file, I aligned the predictions with the Kaggle-provide
 
 """
 
-# === Cell 6E: Kaggle submission from BiLSTM (using tuned threshold) ==============
+# === Cell 6G: Kaggle submission from BiLSTM (using tuned threshold) ==============
 import pandas as pd
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 
@@ -916,7 +1196,7 @@ submission_bilstm.to_csv(out_bilstm, index=False)
 print(f"Saved Kaggle submission to: {out_bilstm}")
 submission_bilstm.head()
 
-"""### **6F — Saving the Tokenizer, BiLSTM Weights, and Architecture**
+"""### **6H — Saving the Tokenizer, BiLSTM Weights, and Architecture**
 
 In this step, I exported all the necessary components required to fully reload and reuse my trained BiLSTM model. After training, I first saved the **tokenizer** into the file  
 `artifacts_bilstm/tokenizer.joblib`, ensuring that the same word-index mapping can be applied during inference.
@@ -930,7 +1210,7 @@ These three files together ensure full reproducibility of the model, making it p
 
 """
 
-# === Cell 6F (Corrected for Keras 3+): Save tokenizer & model weights =============
+# === Cell 6H (Corrected for Keras 3+): Save tokenizer & model weights =============
 import os
 import joblib
 
@@ -955,7 +1235,7 @@ print(" -", tok_path)
 print(" -", weights_path)
 print(" -", json_path)
 
-"""### **6G — Training Curves: Accuracy and Loss Visualization**
+"""### **6I — Training Curves: Accuracy and Loss Visualization**
 
 To better understand the behavior of the BiLSTM model during training, I visualized both the accuracy and loss curves across epochs. These plots allow me to observe how the model learns over time, detect signs of overfitting, and verify that early stopping selected an appropriate checkpoint.
 
@@ -967,7 +1247,7 @@ Together, these curves provide a clear, interpretable summary of the BiLSTM mode
 
 """
 
-# === Cell 6G: Accuracy & Loss Curves =====================================
+# === Cell 6I Accuracy & Loss Curves =====================================
 
 import matplotlib.pyplot as plt
 
@@ -995,6 +1275,25 @@ plt.grid(alpha=0.3)
 
 plt.tight_layout()
 plt.show()
+
+"""## Validation Metrics
+
+In this step, I evaluated the performance of my TF-IDF + LinearSVC model on the held-out validation set. I generated predictions using the fitted classifier, computed the full classification report (precision, recall, and F1 for each class), and measured the overall accuracy. Since LinearSVC does not output probabilities directly, I used its decision function to compute the ROC–AUC score, providing a probability-like measure of class separability. This validation stage allowed me to quantitatively assess how well the model distinguishes disaster-related tweets from non-disaster tweets and to confirm that the baseline performs reliably before moving on to more complex deep learning models.
+"""
+
+# 6J-MUST use the same fitted tfidf from training
+Xva = tfidf.transform(X_val)
+
+# Predictions
+y_pred = clf.predict(Xva)
+
+# Decision scores (for ROC-AUC)
+y_prob = clf.decision_function(Xva)
+
+from sklearn.metrics import classification_report, roc_auc_score
+
+print(classification_report(y_val, y_pred, digits=4))
+print("ROC-AUC:", roc_auc_score(y_val, y_prob))
 
 """### **7A — Model Performance Comparison (Validation Set)**
 
